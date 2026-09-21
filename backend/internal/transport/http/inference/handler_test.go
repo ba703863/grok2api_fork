@@ -103,6 +103,27 @@ func TestVideoGenerationUsesOfficialXAIEndpointsAndFields(t *testing.T) {
 		t.Fatalf("image-only generation status=%d body=%s", imageRecorder.Code, imageRecorder.Body.String())
 	}
 
+	lastFrameOnly := httptest.NewRequest(http.MethodPost, "/v1/videos/generations", strings.NewReader(`{
+		"model":"grok-imagine-video-1.5","image":{"url":"https://example.com/first.png"},
+		"last_frame":{"url":"https://example.com/last.png"}
+	}`))
+	lastFrameOnly.Header.Set("Content-Type", "application/json")
+	lastFrameRecorder := httptest.NewRecorder()
+	router.ServeHTTP(lastFrameRecorder, lastFrameOnly)
+	if lastFrameRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("first+last frame generation status=%d body=%s", lastFrameRecorder.Code, lastFrameRecorder.Body.String())
+	}
+
+	ambiguousLastFrame := httptest.NewRequest(http.MethodPost, "/v1/videos/generations", strings.NewReader(`{
+		"model":"grok-imagine-video-1.5","prompt":"test","last_frame":{}
+	}`))
+	ambiguousLastFrame.Header.Set("Content-Type", "application/json")
+	ambiguousLastFrameRecorder := httptest.NewRecorder()
+	router.ServeHTTP(ambiguousLastFrameRecorder, ambiguousLastFrame)
+	if ambiguousLastFrameRecorder.Code != http.StatusBadRequest || !strings.Contains(ambiguousLastFrameRecorder.Body.String(), "last_frame 必须且只能提供") {
+		t.Fatalf("empty last_frame status=%d body=%s", ambiguousLastFrameRecorder.Code, ambiguousLastFrameRecorder.Body.String())
+	}
+
 	fileInput := httptest.NewRequest(http.MethodPost, "/v1/videos/generations", strings.NewReader(`{
 		"model":"grok-imagine-video","image":{"file_id":"input_abcdefghijklmnopqrstuvwxyz012345"}
 	}`))

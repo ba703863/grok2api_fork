@@ -873,6 +873,9 @@ const docTemplate = `{
                 "image": {
                     "$ref": "#/definitions/httpserver.SwaggerVideoMediaInput"
                 },
+                "last_frame": {
+                    "$ref": "#/definitions/httpserver.SwaggerVideoMediaInput"
+                },
                 "model": {
                     "type": "string",
                     "example": "grok-imagine-video"

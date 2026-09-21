@@ -566,6 +566,10 @@ type VideoRequest struct {
 	Resolution  string
 	// ImageURL is the optional first-frame image (official "image" field).
 	ImageURL string
+	// LastFrameURL is the optional pinned last frame (official "last_frame" field).
+	// Only grok-imagine-video-1.5 accepts it; it may be used alone, with image,
+	// or with reference_images/reference_audios.
+	LastFrameURL string
 	// ReferenceURLs are style/content references (official "reference_images").
 	// A single reference must stay in reference_images and must not be coerced to image.
 	// Official docs forbid combining image with reference_images.

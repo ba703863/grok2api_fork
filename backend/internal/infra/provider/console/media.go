@@ -523,6 +523,16 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 			}
 			payload["image"] = map[string]any{"url": imageURL}
 		}
+		if lastFrameURL := strings.TrimSpace(request.LastFrameURL); lastFrameURL != "" {
+			// Official docs: only grok-imagine-video-1.5 accepts last_frame.
+			if modelName != "grok-imagine-video-1.5" {
+				return provider.VideoResult{}, fmt.Errorf("%s 不支持 last_frame", modelName)
+			}
+			if !validConsoleMediaInputURL(lastFrameURL, "image") {
+				return provider.VideoResult{}, errors.New("视频尾帧必须是 HTTPS URL 或 image data URL")
+			}
+			payload["last_frame"] = map[string]any{"url": lastFrameURL}
+		}
 		if strings.TrimSpace(request.ImageURL) != "" && (len(request.ReferenceURLs) > 0 || len(request.ReferenceAudios) > 0) {
 			return provider.VideoResult{}, errors.New("image 不能与 reference_images/reference_audios 同时使用")
 		}
@@ -562,7 +572,9 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 			}
 		}
 		if _, hasPrompt := payload["prompt"]; !hasPrompt {
-			if _, hasImage := payload["image"]; !hasImage {
+			_, hasImage := payload["image"]
+			_, hasLastFrame := payload["last_frame"]
+			if !hasImage && !hasLastFrame {
 				if !hasReferenceMode {
 					return provider.VideoResult{}, errors.New("文本生视频必须提供 prompt；图片生视频可以省略 prompt")
 				}
@@ -579,8 +591,8 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		}
 		payload["prompt"] = prompt
 		payload["video"] = map[string]any{"url": videoURL}
-		if strings.TrimSpace(request.ImageURL) != "" || len(request.ReferenceURLs) > 0 || len(request.ReferenceAudios) > 0 {
-			return provider.VideoResult{}, errors.New("视频编辑/延长不支持 image、reference_images 或 reference_audios")
+		if strings.TrimSpace(request.ImageURL) != "" || strings.TrimSpace(request.LastFrameURL) != "" || len(request.ReferenceURLs) > 0 || len(request.ReferenceAudios) > 0 {
+			return provider.VideoResult{}, errors.New("视频编辑/延长不支持 image、last_frame、reference_images 或 reference_audios")
 		}
 		if strings.TrimSpace(request.AspectRatio) != "" || strings.TrimSpace(request.Resolution) != "" {
 			return provider.VideoResult{}, errors.New("视频编辑/延长不支持 aspect_ratio 或 resolution")

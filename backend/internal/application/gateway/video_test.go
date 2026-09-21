@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -332,6 +333,7 @@ func TestEncodeDecodeVideoInputPreservesOperationAndReferenceAudio(t *testing.T)
 	encoded, err := encodeVideoInputFull(
 		provider.VideoOperationGenerate,
 		"",
+		"",
 		[]string{"https://example.com/ref.png"},
 		[]string{"eve", " ara "},
 		"",
@@ -347,7 +349,7 @@ func TestEncodeDecodeVideoInputPreservesOperationAndReferenceAudio(t *testing.T)
 		t.Fatalf("generation operation = %q", operation)
 	}
 
-	encoded, err = encodeVideoInputFull(provider.VideoOperationExtend, "", nil, nil, media.InputReference("source-video"))
+	encoded, err = encodeVideoInputFull(provider.VideoOperationExtend, "", "", nil, nil, media.InputReference("source-video"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -898,5 +900,69 @@ func TestVideoWebForbiddenRetriesPinnedAccountOnceThenFailsOver(t *testing.T) {
 	}
 	if stored.Status != media.StatusFailed || stored.AccountID != first.ID {
 		t.Fatalf("unclassified failed job = %#v", stored)
+	}
+}
+
+func TestEncodeDecodeVideoInputPreservesLastFrame(t *testing.T) {
+	encoded, err := encodeVideoInputFull(provider.VideoOperationGenerate, "https://example.com/first.png", " "+media.InputReference("last-frame")+" ", nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decodeVideoLastFrame(encoded); got != media.InputReference("last-frame") {
+		t.Fatalf("last frame = %q from %s", got, encoded)
+	}
+	imageURL, refs := decodeVideoInputParts(encoded)
+	if imageURL != "https://example.com/first.png" || len(refs) != 0 {
+		t.Fatalf("last frame leaked into image/refs: %q %#v from %s", imageURL, refs, encoded)
+	}
+	// Slot accounting and input release must cover the last frame too.
+	all := decodeVideoInput(encoded)
+	if len(all) != 2 || all[1] != media.InputReference("last-frame") {
+		t.Fatalf("all references = %#v", all)
+	}
+	// Legacy readers map image_urls to first frame/references; the last frame must stay out.
+	var stored struct {
+		ImageURLs []string `json:"image_urls"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.ImageURLs) != 1 || stored.ImageURLs[0] != "https://example.com/first.png" {
+		t.Fatalf("legacy image_urls = %#v", stored.ImageURLs)
+	}
+
+	lastOnly, err := encodeVideoInputFull(provider.VideoOperationGenerate, "", "https://example.com/last.png", nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageURL, refs = decodeVideoInputParts(lastOnly)
+	if imageURL != "" || len(refs) != 0 || decodeVideoLastFrame(lastOnly) != "https://example.com/last.png" {
+		t.Fatalf("last-frame-only decode = %q %#v from %s", imageURL, refs, lastOnly)
+	}
+	if got := decodeVideoLastFrame(`{"image_urls":["https://legacy/a.png"]}`); got != "" {
+		t.Fatalf("legacy job last frame = %q", got)
+	}
+}
+
+func TestRoutesForVideoLastFrameKeepsOnlyVideo15ImageRoutes(t *testing.T) {
+	routes := []model.Route{
+		{ID: 1, Provider: account.ProviderWeb, UpstreamModel: "grok-imagine-video"},
+		{ID: 2, Provider: account.ProviderConsole, UpstreamModel: "grok-imagine-video"},
+		{ID: 3, Provider: account.ProviderConsole, UpstreamModel: "grok-imagine-video-1.5"},
+		{ID: 4, Provider: account.ProviderBuild, UpstreamModel: "grok-imagine-video-1.5"},
+	}
+	unchanged, err := routesForVideoLastFrame(routes, false)
+	if err != nil || len(unchanged) != len(routes) {
+		t.Fatalf("without last_frame = %#v, %v", unchanged, err)
+	}
+	compatible, err := routesForVideoLastFrame(routes, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compatible) != 2 || compatible[0].ID != 3 || compatible[1].ID != 4 {
+		t.Fatalf("last_frame routes = %#v", compatible)
+	}
+	if _, err := routesForVideoLastFrame(routes[:2], true); !errors.Is(err, ErrVideoOperationUnsupported) {
+		t.Fatalf("unsupported routes error = %v", err)
 	}
 }

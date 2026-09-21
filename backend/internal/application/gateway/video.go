@@ -52,6 +52,8 @@ type VideoInput struct {
 	Resolution  string
 	// ImageURL is the optional first-frame image (official "image").
 	ImageURL string
+	// LastFrameURL is the optional pinned last frame (official "last_frame").
+	LastFrameURL string
 	// ReferenceURLs are style/content references (official "reference_images").
 	ReferenceURLs []string
 	// ReferenceAudios are preset voice_ids for reference-to-video.
@@ -78,6 +80,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	}
 	if operation == provider.VideoOperationGenerate {
 		hasImage := strings.TrimSpace(input.ImageURL) != ""
+		hasLastFrame := strings.TrimSpace(input.LastFrameURL) != ""
 		hasRefs := len(input.ReferenceURLs) > 0
 		hasRefAudio := len(input.ReferenceAudios) > 0
 		if hasImage && (hasRefs || hasRefAudio) {
@@ -91,7 +94,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 				return media.Job{}, fmt.Errorf("参考图视频 resolution 最高 720p")
 			}
 		}
-		if len(input.Prompt) == 0 && !hasImage && !hasRefs && !hasRefAudio {
+		if len(input.Prompt) == 0 && !hasImage && !hasLastFrame && !hasRefs && !hasRefAudio {
 			return media.Job{}, fmt.Errorf("文本生视频必须提供 prompt；图片生视频可以省略 prompt")
 		}
 		if strings.TrimSpace(input.VideoURL) != "" {
@@ -107,8 +110,8 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		if strings.TrimSpace(input.VideoURL) == "" {
 			return media.Job{}, fmt.Errorf("视频编辑/延长必须提供 video")
 		}
-		if strings.TrimSpace(input.ImageURL) != "" || len(input.ReferenceURLs) > 0 || len(input.ReferenceAudios) > 0 {
-			return media.Job{}, fmt.Errorf("视频编辑/延长不支持 image、reference_images 或 reference_audios")
+		if strings.TrimSpace(input.ImageURL) != "" || strings.TrimSpace(input.LastFrameURL) != "" || len(input.ReferenceURLs) > 0 || len(input.ReferenceAudios) > 0 {
+			return media.Job{}, fmt.Errorf("视频编辑/延长不支持 image、last_frame、reference_images 或 reference_audios")
 		}
 		if operation == provider.VideoOperationEdit && input.Duration != 0 {
 			return media.Job{}, fmt.Errorf("视频编辑不支持 duration")
@@ -142,7 +145,14 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	if err != nil {
 		return media.Job{}, err
 	}
+	routes, err = routesForVideoLastFrame(routes, strings.TrimSpace(input.LastFrameURL) != "")
+	if err != nil {
+		return media.Job{}, err
+	}
 	allRefs := videoInputReferences(input.ImageURL, input.ReferenceURLs)
+	if lastFrame := strings.TrimSpace(input.LastFrameURL); lastFrame != "" {
+		allRefs = append(allRefs, lastFrame)
+	}
 	if err := s.validateVideoInputReferences(ctx, allRefs, "image"); err != nil {
 		return media.Job{}, err
 	}
@@ -151,7 +161,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 			return media.Job{}, err
 		}
 	}
-	inputJSON, err := encodeVideoInputFull(operation, input.ImageURL, input.ReferenceURLs, input.ReferenceAudios, input.VideoURL)
+	inputJSON, err := encodeVideoInputFull(operation, input.ImageURL, input.LastFrameURL, input.ReferenceURLs, input.ReferenceAudios, input.VideoURL)
 	if err != nil {
 		return media.Job{}, err
 	}
@@ -228,6 +238,32 @@ func routesForVideoParameters(routes []model.Route, operation provider.VideoOper
 		return nil, firstErr
 	}
 	return compatible, nil
+}
+
+// routesForVideoLastFrame keeps only routes whose upstream accepts last_frame.
+// xAI documents it for grok-imagine-video-1.5 only; the classic model rejects it
+// and Grok Web has no image input at all.
+func routesForVideoLastFrame(routes []model.Route, hasLastFrame bool) ([]model.Route, error) {
+	if !hasLastFrame || len(routes) == 0 {
+		return routes, nil
+	}
+	compatible := make([]model.Route, 0, len(routes))
+	for _, candidate := range routes {
+		if videoRouteSupportsLastFrame(candidate.Provider, candidate.UpstreamModel) {
+			compatible = append(compatible, candidate)
+		}
+	}
+	if len(compatible) == 0 {
+		return nil, fmt.Errorf("%w: last_frame 仅支持 Build 或 Console 的 grok-imagine-video-1.5", ErrVideoOperationUnsupported)
+	}
+	return compatible, nil
+}
+
+func videoRouteSupportsLastFrame(providerValue account.Provider, upstreamModel string) bool {
+	if providerValue != account.ProviderBuild && providerValue != account.ProviderConsole {
+		return false
+	}
+	return strings.TrimSpace(upstreamModel) == "grok-imagine-video-1.5"
 }
 
 // Console 视频输入的上限与时长按「Provider + 入口字段 + 上游模型」分档。
@@ -514,7 +550,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	if operation == "" {
 		operation = decodeVideoOperation(job.InputJSON)
 	}
-	imageURL, referenceURLs, referenceAudios, videoURL, err := s.resolveVideoJobInputs(ctx, operation, job.InputJSON)
+	imageURL, lastFrameURL, referenceURLs, referenceAudios, videoURL, err := s.resolveVideoJobInputs(ctx, operation, job.InputJSON)
 	if err != nil {
 		s.failVideoJob(parent, job, "input_unavailable", err, 0, nil)
 		return
@@ -604,7 +640,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			Credential: lease.Credential, Billing: lease.Billing, JobID: job.ID, Model: route.UpstreamModel,
 			Operation: operation,
 			Prompt:    job.Prompt, Duration: duration, AspectRatio: aspectRatio, Resolution: resolution,
-			ImageURL: imageURL, ReferenceURLs: referenceURLs, ReferenceAudios: referenceAudios, VideoURL: videoURL,
+			ImageURL: imageURL, LastFrameURL: lastFrameURL, ReferenceURLs: referenceURLs, ReferenceAudios: referenceAudios, VideoURL: videoURL,
 			Progress: func(value int) {
 				value = min(99, max(1, value))
 				if value-lastProgress < 5 {
@@ -820,12 +856,17 @@ func (s *Service) validateVideoInputReferences(ctx context.Context, references [
 	return nil
 }
 
-func (s *Service) resolveVideoInputParts(ctx context.Context, inputJSON string) (string, []string, error) {
+func (s *Service) resolveVideoInputParts(ctx context.Context, inputJSON string) (string, string, []string, error) {
 	imageURL, referenceURLs := decodeVideoInputParts(inputJSON)
+	lastFrameURL := decodeVideoLastFrame(inputJSON)
+	// Resolve every image in one pass so they share a single size budget.
 	all := videoInputReferences(imageURL, referenceURLs)
+	if lastFrameURL != "" {
+		all = append(all, lastFrameURL)
+	}
 	resolved, err := s.resolveVideoInputReferences(ctx, all, "image")
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	// Map resolved URLs back while preserving empty/non-empty slots by original order.
 	next := 0
@@ -848,7 +889,7 @@ func (s *Service) resolveVideoInputParts(ctx context.Context, inputJSON string) 
 			outRefs = append(outRefs, value)
 		}
 	}
-	return outImage, outRefs, nil
+	return outImage, take(lastFrameURL), outRefs, nil
 }
 
 func (s *Service) resolveVideoInputReferences(ctx context.Context, references []string, expectedKind string) ([]string, error) {
@@ -1026,10 +1067,10 @@ func (s *Service) recordVideoAudit(ctx context.Context, job media.Job, durationM
 }
 
 func encodeVideoInput(imageURL string, referenceURLs []string) (string, error) {
-	return encodeVideoInputFull(provider.VideoOperationGenerate, imageURL, referenceURLs, nil, "")
+	return encodeVideoInputFull(provider.VideoOperationGenerate, imageURL, "", referenceURLs, nil, "")
 }
 
-func encodeVideoInputFull(operation provider.VideoOperation, imageURL string, referenceURLs []string, referenceAudios []string, videoURL string) (string, error) {
+func encodeVideoInputFull(operation provider.VideoOperation, imageURL, lastFrameURL string, referenceURLs []string, referenceAudios []string, videoURL string) (string, error) {
 	payload := map[string]any{}
 	if operation == "" {
 		operation = provider.VideoOperationGenerate
@@ -1039,6 +1080,11 @@ func encodeVideoInputFull(operation provider.VideoOperation, imageURL string, re
 	}
 	if value := strings.TrimSpace(imageURL); value != "" {
 		payload["image_url"] = value
+	}
+	// last_frame_url stays out of the legacy image_urls list below: old readers
+	// would mistake it for a first frame or a reference image.
+	if value := strings.TrimSpace(lastFrameURL); value != "" {
+		payload["last_frame_url"] = value
 	}
 	refs := make([]string, 0, len(referenceURLs))
 	for _, raw := range referenceURLs {
@@ -1075,6 +1121,9 @@ func encodeVideoInputFull(operation provider.VideoOperation, imageURL string, re
 func decodeVideoInput(value string) []string {
 	imageURL, refs, videoURL := decodeVideoInputFull(value)
 	values := videoInputReferences(imageURL, refs)
+	if v := decodeVideoLastFrame(value); v != "" {
+		values = append(values, v)
+	}
 	if v := strings.TrimSpace(videoURL); v != "" {
 		values = append(values, v)
 	}
@@ -1130,6 +1179,14 @@ func decodeVideoInputDetailed(value string) (string, []string, []string, string)
 	}
 }
 
+func decodeVideoLastFrame(value string) string {
+	var input struct {
+		LastFrameURL string `json:"last_frame_url"`
+	}
+	_ = json.Unmarshal([]byte(value), &input)
+	return strings.TrimSpace(input.LastFrameURL)
+}
+
 func decodeVideoOperation(value string) provider.VideoOperation {
 	var input struct {
 		Operation string `json:"operation"`
@@ -1145,26 +1202,26 @@ func decodeVideoOperation(value string) provider.VideoOperation {
 	}
 }
 
-func (s *Service) resolveVideoJobInputs(ctx context.Context, operation provider.VideoOperation, inputJSON string) (string, []string, []string, string, error) {
+func (s *Service) resolveVideoJobInputs(ctx context.Context, operation provider.VideoOperation, inputJSON string) (string, string, []string, []string, string, error) {
 	_, _, referenceAudios, videoURL := decodeVideoInputDetailed(inputJSON)
-	resolvedImage, resolvedRefs, err := s.resolveVideoInputParts(ctx, inputJSON)
+	resolvedImage, resolvedLastFrame, resolvedRefs, err := s.resolveVideoInputParts(ctx, inputJSON)
 	if err != nil {
-		return "", nil, nil, "", err
+		return "", "", nil, nil, "", err
 	}
 	if strings.TrimSpace(videoURL) == "" {
-		return resolvedImage, resolvedRefs, referenceAudios, "", nil
+		return resolvedImage, resolvedLastFrame, resolvedRefs, referenceAudios, "", nil
 	}
 	if operation == provider.VideoOperationGenerate {
-		return "", nil, nil, "", ErrVideoInputUnavailable
+		return "", "", nil, nil, "", ErrVideoInputUnavailable
 	}
 	resolvedVideos, err := s.resolveVideoInputReferences(ctx, []string{videoURL}, "video")
 	if err != nil {
-		return "", nil, nil, "", err
+		return "", "", nil, nil, "", err
 	}
 	if len(resolvedVideos) == 0 {
-		return "", nil, nil, "", ErrVideoInputUnavailable
+		return "", "", nil, nil, "", ErrVideoInputUnavailable
 	}
-	return resolvedImage, resolvedRefs, referenceAudios, resolvedVideos[0], nil
+	return resolvedImage, resolvedLastFrame, resolvedRefs, referenceAudios, resolvedVideos[0], nil
 }
 
 func validateVideoReferenceAudios(values []string) error {

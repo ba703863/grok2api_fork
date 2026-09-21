@@ -297,6 +297,10 @@ func videoCreatePayload(request provider.VideoRequest, uploadURL string, profile
 	if imageURL := strings.TrimSpace(request.ImageURL); imageURL != "" {
 		payload["image"] = map[string]any{profile.imageURLField: imageURL}
 	}
+	// last_frame mirrors image: same object shape, same per-profile URL key.
+	if lastFrameURL := strings.TrimSpace(request.LastFrameURL); lastFrameURL != "" {
+		payload["last_frame"] = map[string]any{profile.imageURLField: lastFrameURL}
+	}
 	if strings.TrimSpace(request.ImageURL) != "" && (len(request.ReferenceURLs) > 0 || len(request.ReferenceAudios) > 0) {
 		return nil, fmt.Errorf("image 不能与 reference_images/reference_audios 同时使用")
 	}
@@ -336,7 +340,9 @@ func videoCreatePayload(request provider.VideoRequest, uploadURL string, profile
 		}
 	}
 	if _, hasPrompt := payload["prompt"]; !hasPrompt {
-		if _, hasImage := payload["image"]; !hasImage {
+		_, hasImage := payload["image"]
+		_, hasLastFrame := payload["last_frame"]
+		if !hasImage && !hasLastFrame {
 			if !hasReferenceMode {
 				return nil, fmt.Errorf("文本生视频必须提供 prompt；图片生视频可以省略 prompt")
 			}
@@ -598,6 +604,9 @@ func numberAsInt(value any) (int, bool) {
 func buildVideoImageCount(request provider.VideoRequest) int {
 	count := 0
 	if strings.TrimSpace(request.ImageURL) != "" {
+		count++
+	}
+	if strings.TrimSpace(request.LastFrameURL) != "" {
 		count++
 	}
 	for _, raw := range request.ReferenceURLs {

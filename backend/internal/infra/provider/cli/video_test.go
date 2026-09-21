@@ -715,3 +715,58 @@ func jsonResponse(status int, body string, request *http.Request) *http.Response
 		Request:    request,
 	}
 }
+
+func TestVideoCreatePayloadMapsLastFramePerProfile(t *testing.T) {
+	request := provider.VideoRequest{
+		Prompt: "morph", Duration: 5, AspectRatio: "1:1", Resolution: "480p",
+		ImageURL:     "https://r2.example.com/first.png",
+		LastFrameURL: " https://r2.example.com/last.png ",
+	}
+	buildPayload, err := videoCreatePayload(request, "", buildVideoRequestProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, _ := buildPayload["image"].(map[string]any)
+	lastFrame, ok := buildPayload["last_frame"].(map[string]any)
+	if !ok || lastFrame["image_url"] != "https://r2.example.com/last.png" || image["image_url"] != "https://r2.example.com/first.png" {
+		t.Fatalf("Build first/last payload = %#v", buildPayload)
+	}
+
+	xaiPayload, err := videoCreatePayload(request, "https://api.example/v1/media/uploads/tok", xaiVideoRequestProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastFrame, ok = xaiPayload["last_frame"].(map[string]any)
+	if !ok || lastFrame["url"] != "https://r2.example.com/last.png" {
+		t.Fatalf("XAI last_frame payload = %#v", xaiPayload["last_frame"])
+	}
+	if _, exists := lastFrame["image_url"]; exists {
+		t.Fatalf("XAI last_frame leaked Build field: %#v", lastFrame)
+	}
+
+	withoutLastFrame, err := videoCreatePayload(provider.VideoRequest{Prompt: "x", Duration: 5}, "", buildVideoRequestProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := withoutLastFrame["last_frame"]; exists {
+		t.Fatalf("last_frame must be omitted when unset: %#v", withoutLastFrame)
+	}
+}
+
+func TestVideoCreatePayloadAllowsLastFrameOnlyWithoutPrompt(t *testing.T) {
+	payload, err := videoCreatePayload(provider.VideoRequest{
+		Duration: 5, LastFrameURL: "https://r2.example.com/last.png",
+	}, "", buildVideoRequestProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := payload["image"]; exists {
+		t.Fatalf("last-frame-only payload must not invent a first frame: %#v", payload)
+	}
+	if _, exists := payload["prompt"]; exists {
+		t.Fatalf("empty prompt should be omitted: %#v", payload)
+	}
+	if count := buildVideoImageCount(provider.VideoRequest{ImageURL: "a", LastFrameURL: "b", ReferenceURLs: []string{"c"}}); count != 3 {
+		t.Fatalf("image count = %d", count)
+	}
+}

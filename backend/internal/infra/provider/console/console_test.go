@@ -2475,3 +2475,53 @@ func TestConsoleVideoEditRejectsNonImagineVideoModel(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestConsoleVideoPostsFirstAndLastFrame(t *testing.T) {
+	var created map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if serveTestDPoPToken(t, writer, request) {
+			return
+		}
+		verifyTestDPoPProof(t, request)
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/v1/videos/generations":
+			if err := json.NewDecoder(request.Body).Decode(&created); err != nil {
+				t.Errorf("decode create body: %v", err)
+			}
+			_, _ = writer.Write([]byte(`{"request_id":"upstream-video-last-frame"}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/v1/videos/upstream-video-last-frame":
+			_, _ = writer.Write([]byte(`{"status":"done","progress":100,"video":{"url":"https://vidgen.x.ai/result-last-frame.mp4"}}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	adapter, credential := newConsoleTestAdapter(t, server.URL)
+	result, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+		Credential: credential, Model: "grok-imagine-video-1.5", Duration: 5, AspectRatio: "1:1", Resolution: "480p",
+		ImageURL: "https://example.com/first.png", LastFrameURL: "https://example.com/last.png",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.URL != "https://vidgen.x.ai/result-last-frame.mp4" {
+		t.Fatalf("video result = %#v", result)
+	}
+	image, _ := created["image"].(map[string]any)
+	lastFrame, _ := created["last_frame"].(map[string]any)
+	if image["url"] != "https://example.com/first.png" || lastFrame["url"] != "https://example.com/last.png" {
+		t.Fatalf("create payload = %#v", created)
+	}
+}
+
+func TestConsoleVideoRejectsLastFrameOnBaseModel(t *testing.T) {
+	adapter, credential := newConsoleTestAdapter(t, "https://console.example")
+	_, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+		Credential: credential, Model: "grok-imagine-video", Prompt: "animate", Duration: 6,
+		LastFrameURL: "https://example.com/last.png",
+	})
+	if err == nil || !strings.Contains(err.Error(), "last_frame") {
+		t.Fatalf("error = %v", err)
+	}
+}
