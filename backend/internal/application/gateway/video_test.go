@@ -962,7 +962,7 @@ func TestRoutesForVideoLastFrameKeepsOnlyVideo15ImageRoutes(t *testing.T) {
 	if len(compatible) != 2 || compatible[0].ID != 3 || compatible[1].ID != 4 {
 		t.Fatalf("last_frame routes = %#v", compatible)
 	}
-	if _, err := routesForVideoLastFrame(routes[:2], true); !errors.Is(err, ErrVideoOperationUnsupported) {
+	if _, err := routesForVideoLastFrame(routes[:2], true); !errors.Is(err, ErrVideoParameterInvalid) {
 		t.Fatalf("unsupported routes error = %v", err)
 	}
 }

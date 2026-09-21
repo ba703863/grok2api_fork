@@ -254,7 +254,7 @@ func routesForVideoLastFrame(routes []model.Route, hasLastFrame bool) ([]model.R
 		}
 	}
 	if len(compatible) == 0 {
-		return nil, fmt.Errorf("%w: last_frame 仅支持 Build 或 Console 的 grok-imagine-video-1.5", ErrVideoOperationUnsupported)
+		return nil, fmt.Errorf("%w: last_frame 仅支持 Build 或 Console 的 grok-imagine-video-1.5", ErrVideoParameterInvalid)
 	}
 	return compatible, nil
 }
